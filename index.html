@@ -1,81 +1,327 @@
-// Get references to the UI elements
-const startButton = document.getElementById('startButton');
-const stopButton = document.getElementById('stopButton');
-const statusDisplay = document.getElementById('status');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5-Second Delay Audio Playback</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        h1 {
+            color: #333;
+        }
+        
+        .controls {
+            margin: 20px 0;
+        }
+        
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        #stopButton {
+            background-color: #f44336;
+        }
+        
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            background-color: #f1f1f1;
+        }
 
-// Audio context and nodes
-let audioContext;
-let microphoneStream;
-let sourceNode;
-let delayNode;
-let recording = false;
+        .waveform-container {
+            position: relative;
+            width: 100%;
+            height: 200px;
+            margin: 20px 0;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
 
-// Initialize the application
-startButton.addEventListener('click', startDelayedPlayback);
-stopButton.addEventListener('click', stopDelayedPlayback);
-stopButton.disabled = true;
+        #waveformCanvas {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
 
-// Function to start recording and playback
-async function startDelayedPlayback() {
-  try {
-    // Create a new audio context if one doesn't exist
-    if (!audioContext) {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    
-    // Request microphone access
-    microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    
-    // Create the source node from the microphone stream
-    sourceNode = audioContext.createMediaStreamSource(microphoneStream);
-    
-    // Create a delay node (5 seconds)
-    delayNode = audioContext.createDelay(5);
-    delayNode.delayTime.value = 5;
-    
-    // Connect the nodes: source -> delay -> destination (speakers)
-    sourceNode.connect(delayNode);
-    delayNode.connect(audioContext.destination);
-    
-    // Update UI
-    recording = true;
-    startButton.disabled = true;
-    stopButton.disabled = false;
-    statusDisplay.textContent = 'Recording and playing with 5-second delay...';
-    
-  } catch (error) {
-    console.error('Error accessing microphone:', error);
-    statusDisplay.textContent = `Error: ${error.message}`;
-  }
-}
+        .marker {
+            position: absolute;
+            top: 0;
+            width: 2px;
+            height: 100%;
+            background-color: rgba(255, 0, 0, 0.7);
+        }
 
-// Function to stop recording and playback
-function stopDelayedPlayback() {
-  if (recording) {
-    // Disconnect nodes
-    if (sourceNode) {
-      sourceNode.disconnect();
-    }
-    if (delayNode) {
-      delayNode.disconnect();
-    }
-    
-    // Stop all tracks from the microphone stream
-    if (microphoneStream) {
-      microphoneStream.getTracks().forEach(track => track.stop());
-    }
-    
-    // Update UI
-    recording = false;
-    startButton.disabled = false;
-    stopButton.disabled = true;
-    statusDisplay.textContent = 'Recording stopped.';
-  }
-}
+        .playback-marker {
+            left: 0;
+        }
 
-// Function to resume audio context (needed for browsers that suspend audio context until user interaction)
-document.addEventListener('click', function() {
-  if (audioContext && audioContext.state === 'suspended') {
-    audioContext.resume();
-  }
-}, { once: true });
+        .record-marker {
+            right: 0;
+        }
+
+        .time-indicator {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            padding: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>5-Second Delay Audio Playback</h1>
+    <p>This application records audio from your microphone and plays it back with a 5-second delay.</p>
+    
+    <div class="controls">
+        <button id="startButton">Start</button>
+        <button id="stopButton">Stop</button>
+    </div>
+    
+    <div id="status">Ready to start recording.</div>
+    
+    <div class="waveform-container">
+        <canvas id="waveformCanvas"></canvas>
+        <div class="marker playback-marker"></div>
+        <div class="marker record-marker"></div>
+    </div>
+    
+    <div class="time-indicator">
+        <span>Playback (now)</span>
+        <span>5-second delay</span>
+        <span>Recording (now)</span>
+    </div>
+    
+    <script>
+        // Get references to the UI elements
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDisplay = document.getElementById('status');
+        const waveformCanvas = document.getElementById('waveformCanvas');
+        const canvasCtx = waveformCanvas.getContext('2d');
+
+        // Audio context and nodes
+        let audioContext;
+        let microphoneStream;
+        let sourceNode;
+        let delayNode;
+        let analyserNode;
+        let recording = false;
+        let animationId;
+        
+        // Buffer for storing audio data
+        const bufferSize = 5; // 5 seconds
+        const sampleRate = 60; // Samples per second for visualization
+        const totalSamples = bufferSize * sampleRate;
+        let audioBuffer = new Array(totalSamples).fill(0);
+        
+        // Set canvas dimensions
+        function resizeCanvas() {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = waveformCanvas.getBoundingClientRect();
+            waveformCanvas.width = rect.width * dpr;
+            waveformCanvas.height = rect.height * dpr;
+            canvasCtx.scale(dpr, dpr);
+            waveformCanvas.style.width = rect.width + 'px';
+            waveformCanvas.style.height = rect.height + 'px';
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Initialize the application
+        startButton.addEventListener('click', startDelayedPlayback);
+        stopButton.addEventListener('click', stopDelayedPlayback);
+        stopButton.disabled = true;
+
+        // Function to start recording and playback
+        async function startDelayedPlayback() {
+            try {
+                // Create a new audio context if one doesn't exist
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                
+                // Request microphone access
+                microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // Create the source node from the microphone stream
+                sourceNode = audioContext.createMediaStreamSource(microphoneStream);
+                
+                // Create a delay node (5 seconds)
+                delayNode = audioContext.createDelay(5);
+                delayNode.delayTime.value = 5;
+                
+                // Create an analyser node for visualizing the audio
+                analyserNode = audioContext.createAnalyser();
+                analyserNode.fftSize = 2048;
+                
+                // Connect the nodes: source -> analyser -> delay -> destination (speakers)
+                sourceNode.connect(analyserNode);
+                analyserNode.connect(delayNode);
+                delayNode.connect(audioContext.destination);
+                
+                // Reset the buffer
+                audioBuffer = new Array(totalSamples).fill(0);
+                
+                // Start visualization
+                visualize();
+                
+                // Update UI
+                recording = true;
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                statusDisplay.textContent = 'Recording and playing with 5-second delay...';
+                
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                statusDisplay.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        // Function to stop recording and playback
+        function stopDelayedPlayback() {
+            if (recording) {
+                // Stop visualization
+                cancelAnimationFrame(animationId);
+                
+                // Disconnect nodes
+                if (sourceNode) {
+                    sourceNode.disconnect();
+                }
+                if (analyserNode) {
+                    analyserNode.disconnect();
+                }
+                if (delayNode) {
+                    delayNode.disconnect();
+                }
+                
+                // Stop all tracks from the microphone stream
+                if (microphoneStream) {
+                    microphoneStream.getTracks().forEach(track => track.stop());
+                }
+                
+                // Update UI
+                recording = false;
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                statusDisplay.textContent = 'Recording stopped.';
+                
+                // Clear the canvas
+                const width = waveformCanvas.width / window.devicePixelRatio;
+                const height = waveformCanvas.height / window.devicePixelRatio;
+                canvasCtx.clearRect(0, 0, width, height);
+            }
+        }
+
+        // Function to visualize the audio
+        function visualize() {
+            // Get canvas dimensions
+            const width = waveformCanvas.width / window.devicePixelRatio;
+            const height = waveformCanvas.height / window.devicePixelRatio;
+            
+            // Create a buffer for the analyzer data
+            const bufferLength = analyserNode.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            // Clear the canvas
+            canvasCtx.clearRect(0, 0, width, height);
+            
+            // Function to draw the waveform
+            function draw() {
+                animationId = requestAnimationFrame(draw);
+                
+                // Get the current audio data
+                analyserNode.getByteTimeDomainData(dataArray);
+                
+                // Calculate the current audio volume/amplitude (simplified)
+                let sum = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    sum += Math.abs(dataArray[i] - 128);
+                }
+                const volume = sum / bufferLength;
+                
+                // Shift the buffer to the left
+                audioBuffer.shift();
+                audioBuffer.push(volume);
+                
+                // Clear the canvas
+                canvasCtx.fillStyle = '#f9f9f9';
+                canvasCtx.fillRect(0, 0, width, height);
+                
+                // Draw the grid lines
+                canvasCtx.beginPath();
+                canvasCtx.strokeStyle = '#ddd';
+                canvasCtx.lineWidth = 1;
+                
+                // Vertical grid lines (time markers)
+                for (let i = 0; i <= 5; i++) {
+                    const x = (width / 5) * i;
+                    canvasCtx.moveTo(x, 0);
+                    canvasCtx.lineTo(x, height);
+                }
+                
+                // Horizontal grid line (center)
+                canvasCtx.moveTo(0, height / 2);
+                canvasCtx.lineTo(width, height / 2);
+                canvasCtx.stroke();
+                
+                // Draw the waveform path
+                canvasCtx.beginPath();
+                canvasCtx.strokeStyle = '#2196F3';
+                canvasCtx.lineWidth = 2;
+                
+                // Scale the waveform to fill the canvas
+                const scale = height / 40;  // Adjusted for typical volume values
+                
+                for (let i = 0; i < audioBuffer.length; i++) {
+                    const x = (i / audioBuffer.length) * width;
+                    const y = (height / 2) - (audioBuffer[i] * scale);
+                    
+                    if (i === 0) {
+                        canvasCtx.moveTo(x, y);
+                    } else {
+                        canvasCtx.lineTo(x, y);
+                    }
+                }
+                
+                canvasCtx.stroke();
+            }
+            
+            draw();
+        }
+
+        // Function to resume audio context (needed for browsers that suspend audio context until user interaction)
+        document.addEventListener('click', function() {
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+        }, { once: true });
+    </script>
+</body>
+</html>
