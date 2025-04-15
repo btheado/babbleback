@@ -338,10 +338,10 @@
                 visualize();
                 
                 // Start video frame capture and playback
+                recording = true;
                 captureAndPlayFrames();
                 
                 // Update UI
-                recording = true;
                 startButton.disabled = true;
                 stopButton.disabled = false;
                 statusDisplay.textContent = `Recording and playing with ${currentDelay.toFixed(1)}-second delay...`;
@@ -425,6 +425,7 @@
             
             // Schedule the next frame capture
             setTimeout(captureAndPlayFrames, frameDelay);
+            //statusDisplay.textContent = `Recording: Buffer pos=${frameBufferPosition}, Playback pos=${playbackPosition}, Frames stored=${frameBuffer.filter(Boolean).length}`;
         }
 
         // Function to visualize the audio
