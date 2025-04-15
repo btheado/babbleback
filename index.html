@@ -1,0 +1,81 @@
+// Get references to the UI elements
+const startButton = document.getElementById('startButton');
+const stopButton = document.getElementById('stopButton');
+const statusDisplay = document.getElementById('status');
+
+// Audio context and nodes
+let audioContext;
+let microphoneStream;
+let sourceNode;
+let delayNode;
+let recording = false;
+
+// Initialize the application
+startButton.addEventListener('click', startDelayedPlayback);
+stopButton.addEventListener('click', stopDelayedPlayback);
+stopButton.disabled = true;
+
+// Function to start recording and playback
+async function startDelayedPlayback() {
+  try {
+    // Create a new audio context if one doesn't exist
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    
+    // Request microphone access
+    microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    
+    // Create the source node from the microphone stream
+    sourceNode = audioContext.createMediaStreamSource(microphoneStream);
+    
+    // Create a delay node (5 seconds)
+    delayNode = audioContext.createDelay(5);
+    delayNode.delayTime.value = 5;
+    
+    // Connect the nodes: source -> delay -> destination (speakers)
+    sourceNode.connect(delayNode);
+    delayNode.connect(audioContext.destination);
+    
+    // Update UI
+    recording = true;
+    startButton.disabled = true;
+    stopButton.disabled = false;
+    statusDisplay.textContent = 'Recording and playing with 5-second delay...';
+    
+  } catch (error) {
+    console.error('Error accessing microphone:', error);
+    statusDisplay.textContent = `Error: ${error.message}`;
+  }
+}
+
+// Function to stop recording and playback
+function stopDelayedPlayback() {
+  if (recording) {
+    // Disconnect nodes
+    if (sourceNode) {
+      sourceNode.disconnect();
+    }
+    if (delayNode) {
+      delayNode.disconnect();
+    }
+    
+    // Stop all tracks from the microphone stream
+    if (microphoneStream) {
+      microphoneStream.getTracks().forEach(track => track.stop());
+    }
+    
+    // Update UI
+    recording = false;
+    startButton.disabled = false;
+    stopButton.disabled = true;
+    statusDisplay.textContent = 'Recording stopped.';
+  }
+}
+
+// Function to resume audio context (needed for browsers that suspend audio context until user interaction)
+document.addEventListener('click', function() {
+  if (audioContext && audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+}, { once: true });
