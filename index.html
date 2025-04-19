@@ -304,14 +304,31 @@
                 // Get the current delay value
                 currentDelay = parseFloat(delaySlider.value);
 
-                // Request microphone and camera access
-                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                // Request microphone and camera access with appropriate constraints
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    // Claude added these as part of my request for it to fix audio/video sync,
+                    // but I removed it, thinking that disabling these might introduce audio
+                    // feedback loops. The sync issue seems to be fixed without it.
+                    /*
+                    audio: {
+                        echoCancellation: false,  // Disable echo cancellation for better audio quality
+                        noiseSuppression: false,  // Disable noise suppression
+                        autoGainControl: false    // Disable auto gain
+                    },
+                    */
                     audio: true,
-                    video: { width: { ideal: 640 }, height: { ideal: 480 } }
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: frameRate } // Request consistent frame rate
+                    }
                 });
 
                 // Set the record video source
                 recordVideo.srcObject = mediaStream;
+
+                // Reset audio sync tracking variables
+                audioStartTime = 0;
 
                 // Wait for metadata to load to get actual video dimensions
                 recordVideo.onloadedmetadata = function() {
@@ -349,6 +366,7 @@
                 audioBuffer = new Array(totalSamples).fill(0);
                 bufferPosition = 0;
                 frameBuffer = new Array(frameBufferSize);
+                frameTimestamps = new Array(frameBufferSize);
                 frameBufferPosition = 0;
 
                 // Start visualization
@@ -412,6 +430,10 @@
             }
         }
 
+        // Store frame timestamps for synchronization
+        let frameTimestamps = new Array(frameBufferSize);
+        let audioStartTime = 0;
+
         // Function to capture and play video frames with delay
         function captureAndPlayFrames() {
             if (!recording) return;
@@ -422,20 +444,43 @@
                 return;
             }
 
+            // Get current time - we'll use this for synchronization
+            const currentTime = audioContext.currentTime;
+
+            // Set audio start time reference if this is the first frame
+            if (audioStartTime === 0) {
+                audioStartTime = currentTime;
+            }
+
             // Capture current frame
             recordCtx.drawImage(recordVideo, 0, 0, recordCanvas.width, recordCanvas.height);
 
-            // Store the frame in the buffer
+            // Store the frame in the buffer along with its timestamp
             frameBuffer[frameBufferPosition] = recordCtx.getImageData(0, 0, recordCanvas.width, recordCanvas.height);
+            frameTimestamps[frameBufferPosition] = currentTime;
 
-            // Calculate the playback position based on the current delay
-            const delayFrames = Math.round(currentDelay * frameRate);
-            const playbackPosition = (frameBufferPosition - delayFrames + frameBufferSize) % frameBufferSize;
+            // Calculate playback time (based on audio context time)
+            const playbackTime = currentTime - currentDelay;
 
-            // If we have a frame at the playback position, display it
-            if (frameBuffer[playbackPosition]) {
+            // Find the closest frame that matches our desired playback time
+            let closestFramePos = -1;
+            let minTimeDiff = Infinity;
+
+            // Search for the frame with timestamp closest to our target playback time
+            for (let i = 0; i < frameBufferSize; i++) {
+                if (frameTimestamps[i] && frameBuffer[i]) {
+                    const timeDiff = Math.abs(frameTimestamps[i] - playbackTime);
+                    if (timeDiff < minTimeDiff) {
+                        minTimeDiff = timeDiff;
+                        closestFramePos = i;
+                    }
+                }
+            }
+
+            // If we found a suitable frame, display it
+            if (closestFramePos !== -1 && frameBuffer[closestFramePos]) {
                 // Draw the stored image data to the temp canvas
-                tempCtx.putImageData(frameBuffer[playbackPosition], 0, 0);
+                tempCtx.putImageData(frameBuffer[closestFramePos], 0, 0);
 
                 // Draw from temp canvas to playback canvas
                 playbackCtx.drawImage(tempCanvas, 0, 0);
