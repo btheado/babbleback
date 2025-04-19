@@ -12,15 +12,15 @@
             padding: 20px;
             text-align: center;
         }
-        
+
         h1 {
             color: #333;
         }
-        
+
         .controls {
             margin: 20px 0;
         }
-        
+
         button {
             background-color: #4CAF50;
             border: none;
@@ -34,16 +34,16 @@
             cursor: pointer;
             border-radius: 4px;
         }
-        
+
         button:disabled {
             background-color: #cccccc;
             cursor: not-allowed;
         }
-        
+
         #stopButton {
             background-color: #f44336;
         }
-        
+
         #status {
             margin-top: 10px;
             padding: 10px;
@@ -92,30 +92,30 @@
             width: 100%;
             padding: 5px 0;
         }
-        
+
         .delay-control {
             margin: 20px 0;
             padding: 15px;
             background-color: #f1f1f1;
             border-radius: 4px;
         }
-        
+
         .slider-container {
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 15px;
         }
-        
+
         #delaySlider {
             width: 300px;
         }
-        
+
         #delayValue {
             font-weight: bold;
             min-width: 80px;
         }
-        
+
         .video-container {
             display: flex;
             flex-direction: row;
@@ -123,26 +123,27 @@
             width: 100%;
             margin: 20px 0;
         }
-        
+
         .video-wrapper {
             width: 48%;
             position: relative;
         }
-        
+
         .video-wrapper h3 {
             margin-top: 0;
         }
-        
+
         #recordVideo, #playbackVideo {
             width: 100%;
             background-color: #000;
             border-radius: 4px;
+            object-fit: contain; /* Maintain aspect ratio */
         }
-        
+
         #recordCanvas, #playbackCanvas {
             display: none;
         }
-        
+
         .video-label {
             position: absolute;
             top: 10px;
@@ -158,7 +159,7 @@
 <body>
     <h1>Babbleback</h1>
     <p>This application records audio and video from your devices and plays them back with a configurable delay.</p>
-    
+
     <div class="delay-control">
         <div class="slider-container">
             <span>Delay:</span>
@@ -166,14 +167,14 @@
             <span id="delayValue">5.0 seconds</span>
         </div>
     </div>
-    
+
     <div class="controls">
         <button id="startButton">Start</button>
         <button id="stopButton">Stop</button>
     </div>
-    
+
     <div id="status">Ready to start recording.</div>
-    
+
     <div class="video-container">
         <div class="video-wrapper">
             <h3>Delayed Playback</h3>
@@ -188,19 +189,19 @@
             <div class="video-label">Live</div>
         </div>
     </div>
-    
+
     <div class="waveform-container">
         <canvas id="waveformCanvas"></canvas>
         <div class="marker playback-marker"></div>
         <div class="marker record-marker"></div>
     </div>
-    
+
     <div class="time-indicator">
         <span>Playback (now)</span>
         <span id="delayIndicator">5-second delay</span>
         <span>Recording (now)</span>
     </div>
-    
+
     <script>
         // Get references to the UI elements
         const startButton = document.getElementById('startButton');
@@ -212,14 +213,16 @@
         const delayValue = document.getElementById('delayValue');
         const delayIndicator = document.getElementById('delayIndicator');
         const playbackLabel = document.getElementById('playbackLabel');
-        
+
         // Video elements
         const recordVideo = document.getElementById('recordVideo');
         const playbackVideo = document.getElementById('playbackVideo');
         const recordCanvas = document.getElementById('recordCanvas');
         const playbackCanvas = document.getElementById('playbackCanvas');
+        const tempCanvas = document.createElement('canvas');
         const recordCtx = recordCanvas.getContext('2d');
         const playbackCtx = playbackCanvas.getContext('2d');
+        const tempCtx = tempCanvas.getContext('2d');
 
         // Audio context and nodes
         let audioContext;
@@ -229,33 +232,37 @@
         let analyserNode;
         let recording = false;
         let animationId;
-        
+
         // Current delay value
         let currentDelay = parseFloat(delaySlider.value);
-        
+
         // Maximum buffer size in seconds
         const maxBufferSize = 20; // Match the maximum slider value
-        
+
         // Frame buffer for video
         const frameRate = 30; // Frames per second for video
         const frameDelay = 1000 / frameRate; // Milliseconds between frames
         const frameBufferSize = maxBufferSize * frameRate;
         let frameBuffer = [];
         let frameBufferPosition = 0;
-        
+
+        // Video dimensions
+        let actualVideoWidth = 0;
+        let actualVideoHeight = 0;
+
         // Buffer for storing audio data
         const sampleRate = 60; // Samples per second for visualization
         const totalSamples = maxBufferSize * sampleRate;
         let audioBuffer = new Array(totalSamples).fill(0);
         let bufferPosition = 0; // Current position in the buffer
-        
+
         // Update delay value display
         delaySlider.addEventListener('input', function() {
             const newDelay = parseFloat(this.value);
             delayValue.textContent = newDelay.toFixed(1) + ' seconds';
             delayIndicator.textContent = newDelay.toFixed(1) + '-second delay';
             playbackLabel.textContent = newDelay.toFixed(1) + 's Delay';
-            
+
             if (recording && delayNode) {
                 // Update the delay node's delay time
                 delayNode.delayTime.setValueAtTime(newDelay, audioContext.currentTime);
@@ -264,11 +271,11 @@
                 currentDelay = newDelay;
             }
         });
-        
+
         // Set canvas dimensions
         function resizeCanvas() {
             const dpr = window.devicePixelRatio || 1;
-            
+
             // Waveform canvas
             const waveRect = waveformCanvas.getBoundingClientRect();
             waveformCanvas.width = waveRect.width * dpr;
@@ -276,14 +283,8 @@
             canvasCtx.scale(dpr, dpr);
             waveformCanvas.style.width = waveRect.width + 'px';
             waveformCanvas.style.height = waveRect.height + 'px';
-            
-            // Video canvases - match video dimensions
-            recordCanvas.width = 640;
-            recordCanvas.height = 480;
-            playbackCanvas.width = 640;
-            playbackCanvas.height = 480;
         }
-        
+
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
@@ -299,53 +300,69 @@
                 if (!audioContext) {
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 }
-                
+
                 // Get the current delay value
                 currentDelay = parseFloat(delaySlider.value);
-                
+
                 // Request microphone and camera access
                 mediaStream = await navigator.mediaDevices.getUserMedia({ 
                     audio: true,
-                    video: { width: 640, height: 480 }
+                    video: { width: { ideal: 640 }, height: { ideal: 480 } }
                 });
-                
+
                 // Set the record video source
                 recordVideo.srcObject = mediaStream;
-                
+
+                // Wait for metadata to load to get actual video dimensions
+                recordVideo.onloadedmetadata = function() {
+                    actualVideoWidth = recordVideo.videoWidth;
+                    actualVideoHeight = recordVideo.videoHeight;
+
+                    // Update canvas dimensions to match actual video size
+                    recordCanvas.width = actualVideoWidth;
+                    recordCanvas.height = actualVideoHeight;
+                    playbackCanvas.width = actualVideoWidth;
+                    playbackCanvas.height = actualVideoHeight;
+                    tempCanvas.width = actualVideoWidth;
+                    tempCanvas.height = actualVideoHeight;
+
+                    statusDisplay.textContent = `Recording with ${actualVideoWidth}x${actualVideoHeight} resolution`;
+                };
+
                 // Create the source node from the microphone stream
                 sourceNode = audioContext.createMediaStreamSource(mediaStream);
-                
+
                 // Create a delay node with the maximum possible delay time
                 delayNode = audioContext.createDelay(maxBufferSize);
                 delayNode.delayTime.value = currentDelay;
-                
+
                 // Create an analyser node for visualizing the audio
                 analyserNode = audioContext.createAnalyser();
                 analyserNode.fftSize = 2048;
-                
+
                 // Connect the nodes: source -> analyser -> delay -> destination (speakers)
                 sourceNode.connect(analyserNode);
                 analyserNode.connect(delayNode);
                 delayNode.connect(audioContext.destination);
-                
+
                 // Reset the buffers
                 audioBuffer = new Array(totalSamples).fill(0);
                 bufferPosition = 0;
                 frameBuffer = new Array(frameBufferSize);
                 frameBufferPosition = 0;
-                
+
                 // Start visualization
                 visualize();
-                
+
                 // Start video frame capture and playback
                 recording = true;
                 captureAndPlayFrames();
-                
+
                 // Update UI
                 startButton.disabled = true;
                 stopButton.disabled = false;
                 statusDisplay.textContent = `Recording and playing with ${currentDelay.toFixed(1)}-second delay...`;
-                
+
             } catch (error) {
                 console.error('Error accessing media devices:', error);
                 statusDisplay.textContent = `Error: ${error.message}`;
@@ -357,7 +374,7 @@
             if (recording) {
                 // Stop visualization
                 cancelAnimationFrame(animationId);
-                
+
                 // Disconnect nodes
                 if (sourceNode) {
                     sourceNode.disconnect();
@@ -368,64 +385,73 @@
                 if (delayNode) {
                     delayNode.disconnect();
                 }
-                
+
                 // Stop all tracks from the media stream
                 if (mediaStream) {
                     mediaStream.getTracks().forEach(track => track.stop());
                 }
-                
+
                 // Clear video sources
                 recordVideo.srcObject = null;
                 playbackVideo.srcObject = null;
-                
+
                 // Update UI
                 recording = false;
                 startButton.disabled = false;
                 stopButton.disabled = true;
                 statusDisplay.textContent = 'Recording stopped.';
-                
+
                 // Clear the canvas
                 const width = waveformCanvas.width / window.devicePixelRatio;
                 const height = waveformCanvas.height / window.devicePixelRatio;
                 canvasCtx.clearRect(0, 0, width, height);
-                
+
                 // Clear video canvases
                 recordCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
                 playbackCtx.clearRect(0, 0, playbackCanvas.width, playbackCanvas.height);
             }
         }
-        
+
         // Function to capture and play video frames with delay
         function captureAndPlayFrames() {
             if (!recording) return;
-            
+
+            // Only proceed if we have valid video dimensions
+            if (actualVideoWidth === 0 || actualVideoHeight === 0) {
+                setTimeout(captureAndPlayFrames, frameDelay);
+                return;
+            }
+
             // Capture current frame
             recordCtx.drawImage(recordVideo, 0, 0, recordCanvas.width, recordCanvas.height);
-            
+
             // Store the frame in the buffer
             frameBuffer[frameBufferPosition] = recordCtx.getImageData(0, 0, recordCanvas.width, recordCanvas.height);
-            
+
             // Calculate the playback position based on the current delay
             const delayFrames = Math.round(currentDelay * frameRate);
             const playbackPosition = (frameBufferPosition - delayFrames + frameBufferSize) % frameBufferSize;
-            
+
             // If we have a frame at the playback position, display it
             if (frameBuffer[playbackPosition]) {
-                playbackCtx.putImageData(frameBuffer[playbackPosition], 0, 0);
-                
+                // Draw the stored image data to the temp canvas
+                tempCtx.putImageData(frameBuffer[playbackPosition], 0, 0);
+
+                // Draw from temp canvas to playback canvas
+                playbackCtx.drawImage(tempCanvas, 0, 0);
+
                 // Create a stream from the canvas for the playback video
                 if (!playbackVideo.srcObject) {
                     const playbackStream = playbackCanvas.captureStream(frameRate);
                     playbackVideo.srcObject = playbackStream;
                 }
             }
-            
+
             // Update buffer position
             frameBufferPosition = (frameBufferPosition + 1) % frameBufferSize;
-            
+
             // Schedule the next frame capture
             setTimeout(captureAndPlayFrames, frameDelay);
-            //statusDisplay.textContent = `Recording: Buffer pos=${frameBufferPosition}, Playback pos=${playbackPosition}, Frames stored=${frameBuffer.filter(Boolean).length}`;
         }
 
         // Function to visualize the audio
@@ -433,50 +459,50 @@
             // Get canvas dimensions
             const width = waveformCanvas.width / window.devicePixelRatio;
             const height = waveformCanvas.height / window.devicePixelRatio;
-            
+
             // Create a buffer for the analyzer data
             const bufferLength = analyserNode.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
-            
+
             // Clear the canvas
             canvasCtx.clearRect(0, 0, width, height);
-            
+
             // Last update time for throttling updates
             let lastUpdateTime = 0;
-            
+
             // Function to draw the waveform
             function draw(timestamp) {
                 animationId = requestAnimationFrame(draw);
-                
+
                 // Throttle updates to every ~16ms (roughly 60fps)
                 if (timestamp - lastUpdateTime < 16) {
                     return;
                 }
                 lastUpdateTime = timestamp;
-                
+
                 // Get the current audio data
                 analyserNode.getByteTimeDomainData(dataArray);
-                
+
                 // Calculate the current audio volume/amplitude (simplified)
                 let sum = 0;
                 for (let i = 0; i < bufferLength; i++) {
                     sum += Math.abs(dataArray[i] - 128);
                 }
                 const volume = sum / bufferLength;
-                
+
                 // Store the current volume in the circular buffer
                 audioBuffer[bufferPosition] = volume;
                 bufferPosition = (bufferPosition + 1) % totalSamples;
-                
+
                 // Clear the canvas
                 canvasCtx.fillStyle = '#f9f9f9';
                 canvasCtx.fillRect(0, 0, width, height);
-                
+
                 // Draw the grid lines
                 canvasCtx.beginPath();
                 canvasCtx.strokeStyle = '#ddd';
                 canvasCtx.lineWidth = 1;
-                
+
                 // Vertical grid lines (time markers)
                 // Draw lines based on current delay
                 const gridLines = Math.min(10, Math.max(3, Math.floor(currentDelay)));
@@ -485,43 +511,43 @@
                     canvasCtx.moveTo(x, 0);
                     canvasCtx.lineTo(x, height);
                 }
-                
+
                 // Horizontal grid line (center)
                 canvasCtx.moveTo(0, height / 2);
                 canvasCtx.lineTo(width, height / 2);
                 canvasCtx.stroke();
-                
+
                 // Draw the waveform
                 canvasCtx.beginPath();
                 canvasCtx.strokeStyle = '#2196F3';
                 canvasCtx.lineWidth = 2;
-                
+
                 // Scale the waveform to fill the canvas
                 const scale = height / 40;  // Adjusted for typical volume values
-                
+
                 // Calculate how many samples to display based on current delay
                 const samplesToDisplay = currentDelay * sampleRate;
-                
+
                 for (let i = 0; i < samplesToDisplay; i++) {
                     // Calculate the position in the circular buffer
                     let bufferIndex = (bufferPosition - 1 - i + totalSamples) % totalSamples;
-                    
+
                     // Calculate x position (right to left)
                     const x = width - (i / samplesToDisplay) * width;
-                    
+
                     // Calculate y position (centered with amplitude)
                     const y = (height / 2) - (audioBuffer[bufferIndex] * scale);
-                    
+
                     if (i === 0) {
                         canvasCtx.moveTo(x, y);
                     } else {
                         canvasCtx.lineTo(x, y);
                     }
                 }
-                
+
                 canvasCtx.stroke();
             }
-            
+
             draw(0);
         }
 
